@@ -137,6 +137,15 @@ type Config struct {
 	//     sessions_spawn: oc_sessions_spawn
 	ToolNameRemap map[string]string `yaml:"tool-name-remap,omitempty" json:"tool-name-remap,omitempty"`
 
+	// SystemPromptReplace defines substring replacements applied to system prompt text
+	// before forwarding requests to providers. Keys are the original substrings;
+	// values are the replacement strings. Applied to all system array text blocks.
+	//
+	// Example:
+	//   system-prompt-replace:
+	//     "openclaw.inbound_meta": "app.inbound_meta"
+	SystemPromptReplace map[string]string `yaml:"system-prompt-replace,omitempty" json:"system-prompt-replace,omitempty"`
+
 	legacyMigrationPending bool `yaml:"-" json:"-"`
 }
 

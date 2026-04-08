@@ -161,6 +161,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		bodyForUpstream = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
 	bodyForUpstream = applyToolNameRemap(bodyForUpstream, e.cfg.ToolNameRemap)
+	bodyForUpstream = applySystemPromptReplace(bodyForUpstream, e.cfg.SystemPromptReplace)
 	if experimentalCCHSigningEnabled(e.cfg, auth) {
 		bodyForUpstream = signAnthropicMessagesBody(bodyForUpstream)
 	}
@@ -331,6 +332,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		bodyForUpstream = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
 	bodyForUpstream = applyToolNameRemap(bodyForUpstream, e.cfg.ToolNameRemap)
+	bodyForUpstream = applySystemPromptReplace(bodyForUpstream, e.cfg.SystemPromptReplace)
 	if experimentalCCHSigningEnabled(e.cfg, auth) {
 		bodyForUpstream = signAnthropicMessagesBody(bodyForUpstream)
 	}
@@ -504,6 +506,7 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 		body = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
 	body = applyToolNameRemap(body, e.cfg.ToolNameRemap)
+	body = applySystemPromptReplace(body, e.cfg.SystemPromptReplace)
 
 	url := fmt.Sprintf("%s/v1/messages/count_tokens?beta=true", baseURL)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -1241,6 +1244,34 @@ func reverseToolNameRemapStream(line []byte, remap map[string]string) []byte {
 		return append([]byte("data: "), updated...)
 	}
 	return updated
+}
+
+// applySystemPromptReplace applies substring replacements to all text blocks in the
+// system array of the request body. No-op when replacements is nil or empty.
+func applySystemPromptReplace(body []byte, replacements map[string]string) []byte {
+	if len(replacements) == 0 {
+		return body
+	}
+	system := gjson.GetBytes(body, "system")
+	if !system.Exists() || !system.IsArray() {
+		return body
+	}
+	system.ForEach(func(index, block gjson.Result) bool {
+		if block.Get("type").String() != "text" {
+			return true
+		}
+		text := block.Get("text").String()
+		modified := text
+		for old, new := range replacements {
+			modified = strings.ReplaceAll(modified, old, new)
+		}
+		if modified != text {
+			path := fmt.Sprintf("system.%d.text", index.Int())
+			body, _ = sjson.SetBytes(body, path, modified)
+		}
+		return true
+	})
+	return body
 }
 
 // getClientUserAgent extracts the client User-Agent from the gin context.
