@@ -160,8 +160,8 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 		bodyForUpstream = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
-	bodyForUpstream = applyToolNameRemap(bodyForUpstream, e.cfg.ToolNameRemap)
-	bodyForUpstream = applySystemPromptReplace(bodyForUpstream, e.cfg.SystemPromptReplace)
+	bodyForUpstream = applyToolNameRemap(bodyForUpstream, e.cfg.Claude.ToolNameRemap)
+	bodyForUpstream = applySystemPromptReplace(bodyForUpstream, e.cfg.Claude.SystemPromptReplace)
 	if experimentalCCHSigningEnabled(e.cfg, auth) {
 		bodyForUpstream = signAnthropicMessagesBody(bodyForUpstream)
 	}
@@ -255,7 +255,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 		data = stripClaudeToolPrefixFromResponse(data, claudeToolPrefix)
 	}
-	data = reverseToolNameRemap(data, e.cfg.ToolNameRemap)
+	data = reverseToolNameRemap(data, e.cfg.Claude.ToolNameRemap)
 	var param any
 	out := sdktranslator.TranslateNonStream(
 		ctx,
@@ -331,8 +331,8 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 		bodyForUpstream = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
-	bodyForUpstream = applyToolNameRemap(bodyForUpstream, e.cfg.ToolNameRemap)
-	bodyForUpstream = applySystemPromptReplace(bodyForUpstream, e.cfg.SystemPromptReplace)
+	bodyForUpstream = applyToolNameRemap(bodyForUpstream, e.cfg.Claude.ToolNameRemap)
+	bodyForUpstream = applySystemPromptReplace(bodyForUpstream, e.cfg.Claude.SystemPromptReplace)
 	if experimentalCCHSigningEnabled(e.cfg, auth) {
 		bodyForUpstream = signAnthropicMessagesBody(bodyForUpstream)
 	}
@@ -424,7 +424,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 					line = stripClaudeToolPrefixFromStreamLine(line, claudeToolPrefix)
 				}
-				line = reverseToolNameRemapStream(line, e.cfg.ToolNameRemap)
+				line = reverseToolNameRemapStream(line, e.cfg.Claude.ToolNameRemap)
 				// Forward the line as-is to preserve SSE format
 				cloned := make([]byte, len(line)+1)
 				copy(cloned, line)
@@ -452,7 +452,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 				line = stripClaudeToolPrefixFromStreamLine(line, claudeToolPrefix)
 			}
-			line = reverseToolNameRemapStream(line, e.cfg.ToolNameRemap)
+			line = reverseToolNameRemapStream(line, e.cfg.Claude.ToolNameRemap)
 			chunks := sdktranslator.TranslateStream(
 				ctx,
 				to,
@@ -505,8 +505,8 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 		body = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
-	body = applyToolNameRemap(body, e.cfg.ToolNameRemap)
-	body = applySystemPromptReplace(body, e.cfg.SystemPromptReplace)
+	body = applyToolNameRemap(body, e.cfg.Claude.ToolNameRemap)
+	body = applySystemPromptReplace(body, e.cfg.Claude.SystemPromptReplace)
 
 	url := fmt.Sprintf("%s/v1/messages/count_tokens?beta=true", baseURL)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))

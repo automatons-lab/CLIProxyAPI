@@ -126,27 +126,34 @@ type Config struct {
 	// Payload defines default and override rules for provider payload parameters.
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
 
-	// ToolNameRemap defines a mapping of tool names to replace before forwarding requests
-	// to providers. Keys are original tool names sent by the client; values are the names
-	// sent upstream. The reverse mapping is automatically applied to tool_use blocks in
-	// responses so the client always sees the original names.
+	// Claude groups Claude-specific request/response transformation settings that
+	// are applied only on the Claude upstream route.
 	//
 	// Example:
-	//   tool-name-remap:
-	//     agents_list: oc_agents_list
-	//     sessions_spawn: oc_sessions_spawn
-	ToolNameRemap map[string]string `yaml:"tool-name-remap,omitempty" json:"tool-name-remap,omitempty"`
-
-	// SystemPromptReplace defines substring replacements applied to system prompt text
-	// before forwarding requests to providers. Keys are the original substrings;
-	// values are the replacement strings. Applied to all system array text blocks.
-	//
-	// Example:
-	//   system-prompt-replace:
-	//     "openclaw.inbound_meta": "app.inbound_meta"
-	SystemPromptReplace map[string]string `yaml:"system-prompt-replace,omitempty" json:"system-prompt-replace,omitempty"`
+	//   claude:
+	//     tool-name-remap:
+	//       agents_list: oc_agents_list
+	//       sessions_spawn: oc_sessions_spawn
+	//     system-prompt-replace:
+	//       "openclaw.inbound_meta": "app.inbound_meta"
+	Claude ClaudeConfig `yaml:"claude,omitempty" json:"claude,omitempty"`
 
 	legacyMigrationPending bool `yaml:"-" json:"-"`
+}
+
+// ClaudeConfig groups Claude-specific request/response transformation settings.
+// These are applied only on the Claude upstream route.
+type ClaudeConfig struct {
+	// ToolNameRemap defines a mapping of tool names to replace before forwarding
+	// requests upstream. Keys are original tool names sent by the client; values
+	// are the names sent upstream. The reverse mapping is automatically applied
+	// to tool_use blocks in responses so the client always sees the original names.
+	ToolNameRemap map[string]string `yaml:"tool-name-remap,omitempty" json:"tool-name-remap,omitempty"`
+
+	// SystemPromptReplace defines substring replacements applied to system prompt
+	// text before forwarding requests upstream. Keys are the original substrings;
+	// values are the replacement strings. Applied to all system array text blocks.
+	SystemPromptReplace map[string]string `yaml:"system-prompt-replace,omitempty" json:"system-prompt-replace,omitempty"`
 }
 
 // ClaudeHeaderDefaults configures default header values injected into Claude API requests.
