@@ -126,6 +126,17 @@ type Config struct {
 	// Payload defines default and override rules for provider payload parameters.
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
 
+	// ToolNameRemap defines a mapping of tool names to replace before forwarding requests
+	// to providers. Keys are original tool names sent by the client; values are the names
+	// sent upstream. The reverse mapping is automatically applied to tool_use blocks in
+	// responses so the client always sees the original names.
+	//
+	// Example:
+	//   tool-name-remap:
+	//     agents_list: oc_agents_list
+	//     sessions_spawn: oc_sessions_spawn
+	ToolNameRemap map[string]string `yaml:"tool-name-remap,omitempty" json:"tool-name-remap,omitempty"`
+
 	legacyMigrationPending bool `yaml:"-" json:"-"`
 }
 

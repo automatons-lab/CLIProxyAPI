@@ -160,6 +160,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 		bodyForUpstream = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
+	bodyForUpstream = applyToolNameRemap(bodyForUpstream, e.cfg.ToolNameRemap)
 	if experimentalCCHSigningEnabled(e.cfg, auth) {
 		bodyForUpstream = signAnthropicMessagesBody(bodyForUpstream)
 	}
@@ -253,6 +254,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 		data = stripClaudeToolPrefixFromResponse(data, claudeToolPrefix)
 	}
+	data = reverseToolNameRemap(data, e.cfg.ToolNameRemap)
 	var param any
 	out := sdktranslator.TranslateNonStream(
 		ctx,
@@ -328,6 +330,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 		bodyForUpstream = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
+	bodyForUpstream = applyToolNameRemap(bodyForUpstream, e.cfg.ToolNameRemap)
 	if experimentalCCHSigningEnabled(e.cfg, auth) {
 		bodyForUpstream = signAnthropicMessagesBody(bodyForUpstream)
 	}
@@ -419,6 +422,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 					line = stripClaudeToolPrefixFromStreamLine(line, claudeToolPrefix)
 				}
+				line = reverseToolNameRemapStream(line, e.cfg.ToolNameRemap)
 				// Forward the line as-is to preserve SSE format
 				cloned := make([]byte, len(line)+1)
 				copy(cloned, line)
@@ -446,6 +450,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 				line = stripClaudeToolPrefixFromStreamLine(line, claudeToolPrefix)
 			}
+			line = reverseToolNameRemapStream(line, e.cfg.ToolNameRemap)
 			chunks := sdktranslator.TranslateStream(
 				ctx,
 				to,
@@ -498,6 +503,7 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 		body = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
+	body = applyToolNameRemap(body, e.cfg.ToolNameRemap)
 
 	url := fmt.Sprintf("%s/v1/messages/count_tokens?beta=true", baseURL)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -1116,6 +1122,120 @@ func stripClaudeToolPrefixFromStreamLine(line []byte, prefix string) []byte {
 		return line
 	}
 
+	trimmed := bytes.TrimSpace(line)
+	if bytes.HasPrefix(trimmed, []byte("data:")) {
+		return append([]byte("data: "), updated...)
+	}
+	return updated
+}
+
+// applyToolNameRemap replaces tool names in a request body's tools array and tool_choice
+// according to the provided mapping. No-op when remap is nil or empty.
+func applyToolNameRemap(body []byte, remap map[string]string) []byte {
+	if len(remap) == 0 {
+		return body
+	}
+	if tools := gjson.GetBytes(body, "tools"); tools.Exists() && tools.IsArray() {
+		tools.ForEach(func(index, tool gjson.Result) bool {
+			name := tool.Get("name").String()
+			if newName, ok := remap[name]; ok {
+				path := fmt.Sprintf("tools.%d.name", index.Int())
+				body, _ = sjson.SetBytes(body, path, newName)
+			}
+			return true
+		})
+	}
+	if toolChoice := gjson.GetBytes(body, "tool_choice"); toolChoice.Exists() {
+		if toolChoice.Get("type").String() == "tool" {
+			name := toolChoice.Get("name").String()
+			if newName, ok := remap[name]; ok {
+				body, _ = sjson.SetBytes(body, "tool_choice.name", newName)
+			}
+		}
+	}
+	return body
+}
+
+// reverseToolNameRemap restores original tool names in a non-streaming response body
+// by applying the inverse of the provided mapping to tool_use and tool_reference blocks.
+func reverseToolNameRemap(body []byte, remap map[string]string) []byte {
+	if len(remap) == 0 {
+		return body
+	}
+	reverse := make(map[string]string, len(remap))
+	for k, v := range remap {
+		reverse[v] = k
+	}
+	content := gjson.GetBytes(body, "content")
+	if !content.Exists() || !content.IsArray() {
+		return body
+	}
+	content.ForEach(func(index, part gjson.Result) bool {
+		switch part.Get("type").String() {
+		case "tool_use":
+			name := part.Get("name").String()
+			if origName, ok := reverse[name]; ok {
+				path := fmt.Sprintf("content.%d.name", index.Int())
+				body, _ = sjson.SetBytes(body, path, origName)
+			}
+		case "tool_reference":
+			toolName := part.Get("tool_name").String()
+			if origName, ok := reverse[toolName]; ok {
+				path := fmt.Sprintf("content.%d.tool_name", index.Int())
+				body, _ = sjson.SetBytes(body, path, origName)
+			}
+		}
+		return true
+	})
+	return body
+}
+
+// reverseToolNameRemapStream restores original tool names in a single SSE stream line
+// by applying the inverse of the provided mapping to content_block events.
+func reverseToolNameRemapStream(line []byte, remap map[string]string) []byte {
+	if len(remap) == 0 {
+		return line
+	}
+	reverse := make(map[string]string, len(remap))
+	for k, v := range remap {
+		reverse[v] = k
+	}
+	payload := helps.JSONPayload(line)
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return line
+	}
+	contentBlock := gjson.GetBytes(payload, "content_block")
+	if !contentBlock.Exists() {
+		return line
+	}
+	var (
+		updated []byte
+		err     error
+	)
+	switch contentBlock.Get("type").String() {
+	case "tool_use":
+		name := contentBlock.Get("name").String()
+		origName, ok := reverse[name]
+		if !ok {
+			return line
+		}
+		updated, err = sjson.SetBytes(payload, "content_block.name", origName)
+		if err != nil {
+			return line
+		}
+	case "tool_reference":
+		toolName := contentBlock.Get("tool_name").String()
+		origName, ok := reverse[toolName]
+		if !ok {
+			return line
+		}
+		updated, err = sjson.SetBytes(payload, "content_block.tool_name", origName)
+		if err != nil {
+			return line
+		}
+	default:
+		return line
+	}
 	trimmed := bytes.TrimSpace(line)
 	if bytes.HasPrefix(trimmed, []byte("data:")) {
 		return append([]byte("data: "), updated...)
