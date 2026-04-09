@@ -162,6 +162,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	}
 	bodyForUpstream = applyToolNameRemap(bodyForUpstream, e.cfg.Claude.ToolNameRemap)
 	bodyForUpstream = applySystemPromptReplace(bodyForUpstream, e.cfg.Claude.SystemPromptReplace)
+	bodyForUpstream = applySystemPromptRemap(bodyForUpstream, e.cfg.Claude.SystemPromptRemap)
 	if experimentalCCHSigningEnabled(e.cfg, auth) {
 		bodyForUpstream = signAnthropicMessagesBody(bodyForUpstream)
 	}
@@ -256,6 +257,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		data = stripClaudeToolPrefixFromResponse(data, claudeToolPrefix)
 	}
 	data = reverseToolNameRemap(data, e.cfg.Claude.ToolNameRemap)
+	data = reverseSystemPromptRemap(data, e.cfg.Claude.SystemPromptRemap)
 	var param any
 	out := sdktranslator.TranslateNonStream(
 		ctx,
@@ -333,6 +335,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	}
 	bodyForUpstream = applyToolNameRemap(bodyForUpstream, e.cfg.Claude.ToolNameRemap)
 	bodyForUpstream = applySystemPromptReplace(bodyForUpstream, e.cfg.Claude.SystemPromptReplace)
+	bodyForUpstream = applySystemPromptRemap(bodyForUpstream, e.cfg.Claude.SystemPromptRemap)
 	if experimentalCCHSigningEnabled(e.cfg, auth) {
 		bodyForUpstream = signAnthropicMessagesBody(bodyForUpstream)
 	}
@@ -425,6 +428,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 					line = stripClaudeToolPrefixFromStreamLine(line, claudeToolPrefix)
 				}
 				line = reverseToolNameRemapStream(line, e.cfg.Claude.ToolNameRemap)
+				line = reverseSystemPromptRemapStream(line, e.cfg.Claude.SystemPromptRemap)
 				// Forward the line as-is to preserve SSE format
 				cloned := make([]byte, len(line)+1)
 				copy(cloned, line)
@@ -453,6 +457,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				line = stripClaudeToolPrefixFromStreamLine(line, claudeToolPrefix)
 			}
 			line = reverseToolNameRemapStream(line, e.cfg.Claude.ToolNameRemap)
+			line = reverseSystemPromptRemapStream(line, e.cfg.Claude.SystemPromptRemap)
 			chunks := sdktranslator.TranslateStream(
 				ctx,
 				to,
@@ -507,6 +512,7 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	}
 	body = applyToolNameRemap(body, e.cfg.Claude.ToolNameRemap)
 	body = applySystemPromptReplace(body, e.cfg.Claude.SystemPromptReplace)
+	body = applySystemPromptRemap(body, e.cfg.Claude.SystemPromptRemap)
 
 	url := fmt.Sprintf("%s/v1/messages/count_tokens?beta=true", baseURL)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -1244,6 +1250,154 @@ func reverseToolNameRemapStream(line []byte, remap map[string]string) []byte {
 		return append([]byte("data: "), updated...)
 	}
 	return updated
+}
+
+// applySystemPromptRemap applies forward substring remapping (key→value) to text
+// in the system array and to text content blocks within the messages array.
+// The reverse mapping is automatically applied to upstream response text so the
+// client always sees the original substrings.
+func applySystemPromptRemap(body []byte, remap map[string]string) []byte {
+	if len(remap) == 0 {
+		return body
+	}
+	apply := func(s string) string {
+		for old, new := range remap {
+			s = strings.ReplaceAll(s, old, new)
+		}
+		return s
+	}
+	if system := gjson.GetBytes(body, "system"); system.Exists() && system.IsArray() {
+		system.ForEach(func(index, block gjson.Result) bool {
+			if block.Get("type").String() != "text" {
+				return true
+			}
+			text := block.Get("text").String()
+			modified := apply(text)
+			if modified != text {
+				path := fmt.Sprintf("system.%d.text", index.Int())
+				body, _ = sjson.SetBytes(body, path, modified)
+			}
+			return true
+		})
+	}
+	if messages := gjson.GetBytes(body, "messages"); messages.Exists() && messages.IsArray() {
+		messages.ForEach(func(mi, msg gjson.Result) bool {
+			content := msg.Get("content")
+			if !content.Exists() {
+				return true
+			}
+			if content.Type == gjson.String {
+				original := content.String()
+				modified := apply(original)
+				if modified != original {
+					body, _ = sjson.SetBytes(body, fmt.Sprintf("messages.%d.content", mi.Int()), modified)
+				}
+				return true
+			}
+			if content.IsArray() {
+				content.ForEach(func(ci, part gjson.Result) bool {
+					if part.Get("type").String() != "text" {
+						return true
+					}
+					text := part.Get("text").String()
+					modified := apply(text)
+					if modified != text {
+						body, _ = sjson.SetBytes(body, fmt.Sprintf("messages.%d.content.%d.text", mi.Int(), ci.Int()), modified)
+					}
+					return true
+				})
+			}
+			return true
+		})
+	}
+	return body
+}
+
+// reverseSystemPromptRemap restores the original substrings in a non-streaming
+// response body by applying the inverse of the provided mapping to all text
+// content blocks.
+func reverseSystemPromptRemap(body []byte, remap map[string]string) []byte {
+	if len(remap) == 0 {
+		return body
+	}
+	reverse := make(map[string]string, len(remap))
+	for k, v := range remap {
+		reverse[v] = k
+	}
+	apply := func(s string) string {
+		for old, new := range reverse {
+			s = strings.ReplaceAll(s, old, new)
+		}
+		return s
+	}
+	content := gjson.GetBytes(body, "content")
+	if !content.Exists() || !content.IsArray() {
+		return body
+	}
+	content.ForEach(func(index, part gjson.Result) bool {
+		if part.Get("type").String() != "text" {
+			return true
+		}
+		text := part.Get("text").String()
+		modified := apply(text)
+		if modified != text {
+			body, _ = sjson.SetBytes(body, fmt.Sprintf("content.%d.text", index.Int()), modified)
+		}
+		return true
+	})
+	return body
+}
+
+// reverseSystemPromptRemapStream restores the original substrings in a single
+// SSE stream line by applying the inverse of the provided mapping to text
+// fields inside content_block_start and content_block_delta events.
+func reverseSystemPromptRemapStream(line []byte, remap map[string]string) []byte {
+	if len(remap) == 0 {
+		return line
+	}
+	reverse := make(map[string]string, len(remap))
+	for k, v := range remap {
+		reverse[v] = k
+	}
+	apply := func(s string) string {
+		for old, new := range reverse {
+			s = strings.ReplaceAll(s, old, new)
+		}
+		return s
+	}
+	payload := helps.JSONPayload(line)
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return line
+	}
+	changed := false
+	if cb := gjson.GetBytes(payload, "content_block"); cb.Exists() && cb.Get("type").String() == "text" {
+		text := cb.Get("text").String()
+		modified := apply(text)
+		if modified != text {
+			if updated, err := sjson.SetBytes(payload, "content_block.text", modified); err == nil {
+				payload = updated
+				changed = true
+			}
+		}
+	}
+	if d := gjson.GetBytes(payload, "delta"); d.Exists() && d.Get("type").String() == "text_delta" {
+		text := d.Get("text").String()
+		modified := apply(text)
+		if modified != text {
+			if updated, err := sjson.SetBytes(payload, "delta.text", modified); err == nil {
+				payload = updated
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return line
+	}
+	trimmed := bytes.TrimSpace(line)
+	if bytes.HasPrefix(trimmed, []byte("data:")) {
+		return append([]byte("data: "), payload...)
+	}
+	return payload
 }
 
 // applySystemPromptReplace applies substring replacements to all text blocks in the

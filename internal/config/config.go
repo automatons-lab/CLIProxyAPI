@@ -154,6 +154,14 @@ type ClaudeConfig struct {
 	// text before forwarding requests upstream. Keys are the original substrings;
 	// values are the replacement strings. Applied to all system array text blocks.
 	SystemPromptReplace map[string]string `yaml:"system-prompt-replace,omitempty" json:"system-prompt-replace,omitempty"`
+
+	// SystemPromptRemap defines bidirectional substring remapping. The forward
+	// mapping (key→value) is applied to text in the system array and to text
+	// content blocks within the messages array before forwarding upstream. The
+	// reverse mapping (value→key) is automatically applied to text content in
+	// the upstream response (both streaming and non-streaming) so the client
+	// always sees the original substrings.
+	SystemPromptRemap map[string]string `yaml:"system-prompt-remap,omitempty" json:"system-prompt-remap,omitempty"`
 }
 
 // ClaudeHeaderDefaults configures default header values injected into Claude API requests.
